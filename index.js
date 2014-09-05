@@ -1,20 +1,21 @@
-var Readable = require('stream').Readable,
+var PassThrough = require('stream').PassThrough,
     pygmentize = require('pygmentize-bundled'),
     util = require('util'),
     fs = require('fs'),
+    es = require('event-stream'),
     marked = require('marked');
 
 //
-// ### @function MarkedStream
+// ### @function MarkStream
 // #### @path {String} Path to file you want to read
 // #### @options {Object} Marked parser options
-// Creates a `marked-stream` to recieve the an html stream from a path to
-// a markdown file
+// Creates a `mark-stream` to recieve a token stream from a path
 //
-var MarkedStream = function (path, options) {
-  Readable.call(this, { encoding: 'utf8' });
+var MarkStream = function (path, options) {
+  PassThrough.call(this, {objectMode: true});
 
   var self = this;
+  var rs;
 
   options = options || {
     gfm: true,
@@ -27,19 +28,34 @@ var MarkedStream = function (path, options) {
     }
   };
 
-  fs.readFile(path, 'utf8', this._encode.bind(this, options));
+  if (typeof path === 'string') {
+    this.pipeline(fs.createReadStream(path, 'utf8'), this._encode.bind(this, options))
+  } else {
+    this.on('pipe', function (rs) { 
+      this.pipeline(rs, this._encode.bind(this, options))
+      rs.unpipe(this)
+    });
+  }
+
+
 
 };
 
 //
-// Inherit from Readable Stream
+// Inherit from PassThrough Stream
 //
-util.inherits(MarkedStream, Readable);
+util.inherits(MarkStream, PassThrough);
 
-//
-// ### @private function _read(n)
-//
-MarkedStream.prototype._read = function (n) {};
+
+MarkStream.prototype.pipeline = function pipeline(rs, fn) {
+  var self = this;
+  rs.pipe(es.split()).on('data', fn)
+
+
+  rs.on('end', function () {
+      self.push(null);
+  })
+}
 
 //
 // ### @private function _encode(options, err, text)
@@ -47,22 +63,15 @@ MarkedStream.prototype._read = function (n) {};
 // #### @err {Error} Possible error if bad path is passed in as argument
 // #### @text {String} File contents of markdown file
 // Continuation after asynchronously reading the file
-MarkedStream.prototype._encode = function (options, err, text) {
-  if (err) { return this.emit('error', err) }
-
-  var md = marked(text, options);
-
-  this.push(md, 'utf8');
-  //
-  // Remark: This is required so the stream calls the `end` event
-  //
-  this.push(null);
-
+MarkStream.prototype._encode = function (options, text) {
+  var md = marked.lexer(text, options).forEach(function(token){
+    this.write(token)
+  }, this);
 };
 
 //
 // Export a new insance of the stream
 //
 module.exports = function (path, options) {
-  return new MarkedStream(path,  options);
+  return new MarkStream(path,  options);
 };
